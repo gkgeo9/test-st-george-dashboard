@@ -1,6 +1,4 @@
-dash==2.14.0
+pandas==2.1.0
 plotly==5.18.0
-pandas
-numpy
-yfinance
-gunicorn
+numpy==1.24.3
+yfinance==0.2.28
