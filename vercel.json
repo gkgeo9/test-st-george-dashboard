@@ -1,5 +1,3 @@
 {
-  "version": 2,
-  "buildCommand": "python generate_static_dashboard.py",
   "outputDirectory": "public"
 }
