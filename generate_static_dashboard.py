@@ -431,7 +431,7 @@ def generate_static_dashboard(portfolio_manager, output_file="public/index.html"
                 <strong>ℹ️ Note:</strong> This dashboard automatically updates every 6 hours. 
                 Data is pulled from your trading log and processed via GitHub Actions.
             </div>
-            {fig.to_html(include_plotlyjs='cdn', full_html=False, config={{'displayModeBar': True, 'displaylogo': False}})}
+            {fig.to_html(include_plotlyjs='cdn', full_html=False, config={'displayModeBar': True, 'displaylogo': False})}
         </div>
     </body>
     </html>
