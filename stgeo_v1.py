@@ -5,6 +5,7 @@ import random
 from datetime import datetime, timedelta
 import json
 import os
+import time
 from typing import Dict, List, Optional, Tuple
 
 
@@ -21,27 +22,47 @@ class CSVTradeLogger:
 
     def backfill_history(self, start: str, end: Optional[str] = None, interval: str = "1d",
                          note: str = "history backfill"):
-        data = yf.download(self.tickers, start=start, end=end, interval=interval,
-                           group_by='ticker', auto_adjust=False, progress=False)
-        rows = []
-        for t in self.tickers:
-            df = data[t] if t in data else data
-            if isinstance(df, pd.DataFrame) and "Close" in df.columns:
-                for ts, close in df["Close"].dropna().items():
-                    rows.append({
-                        "timestamp": pd.Timestamp(ts).strftime("%Y-%m-%d %H:%M:%S"),
-                        "ticker": t,
-                        "close": float(close),
-                        "action": "NONE",
-                        "quantity": 0,
-                        "position_after": None,
-                        "cash_after": None,
-                        "note": note
-                    })
-        if rows:
-            pd.DataFrame(rows).to_csv(self.csv_path, mode='a',
-                                      header=not os.path.getsize(self.csv_path), index=False)
-            self._dedup_csv()  # <-- auto-dedup after backfill
+        """Backfill with rate limit handling"""
+        max_retries = 3
+        retry_delay = 5
+        
+        for attempt in range(max_retries):
+            try:
+                # Add delay to avoid rate limiting
+                if attempt > 0:
+                    print(f"  Retry {attempt}/{max_retries} after {retry_delay}s delay...")
+                    time.sleep(retry_delay)
+                
+                data = yf.download(self.tickers, start=start, end=end, interval=interval,
+                                   group_by='ticker', auto_adjust=False, progress=False)
+                rows = []
+                for t in self.tickers:
+                    df = data[t] if t in data else data
+                    if isinstance(df, pd.DataFrame) and "Close" in df.columns:
+                        for ts, close in df["Close"].dropna().items():
+                            rows.append({
+                                "timestamp": pd.Timestamp(ts).strftime("%Y-%m-%d %H:%M:%S"),
+                                "ticker": t,
+                                "close": float(close),
+                                "action": "NONE",
+                                "quantity": 0,
+                                "position_after": None,
+                                "cash_after": None,
+                                "note": note
+                            })
+                if rows:
+                    pd.DataFrame(rows).to_csv(self.csv_path, mode='a',
+                                              header=not os.path.getsize(self.csv_path), index=False)
+                    self._dedup_csv()
+                return  # Success, exit function
+                
+            except Exception as e:
+                if "429" in str(e) or "Too Many Requests" in str(e):
+                    if attempt < max_retries - 1:
+                        retry_delay *= 2  # Exponential backoff
+                        continue
+                print(f"  Warning: Backfill error: {e}")
+                return
 
     def log_now(self, prices: Dict[str, float], action_map: Dict[str, Dict],
                 positions_after: Dict[str, int], cash_after: float, note: str = ""):
@@ -62,9 +83,8 @@ class CSVTradeLogger:
             })
         pd.DataFrame(rows).to_csv(self.csv_path, mode='a',
                                   header=not os.path.getsize(self.csv_path), index=False)
-        self._dedup_csv()  # <-- auto-dedup after logging
+        self._dedup_csv()
 
-    # ---- auto-backfill machinery ----
     def _last_logged_day(self) -> Optional[datetime]:
         if not os.path.exists(self.csv_path) or os.path.getsize(self.csv_path) == 0:
             return None
@@ -147,21 +167,88 @@ class PortfolioManager:
         self.daily_values = data.get('daily_values', [])
         self.start_date = datetime.fromisoformat(data.get('start_date', datetime.now().date().isoformat())).date()
 
-    def get_current_prices(self) -> Dict[str, float]:
+    def get_current_prices(self, use_csv_fallback: bool = True) -> Dict[str, float]:
+        """Get current prices with rate limit handling and CSV fallback"""
+        max_retries = 3
+        retry_delay = 2
+        
+        for attempt in range(max_retries):
+            try:
+                if attempt > 0:
+                    time.sleep(retry_delay)
+                    retry_delay *= 2
+                
+                prices = {}
+                for stock in self.stocks:
+                    try:
+                        ticker = yf.Ticker(stock)
+                        hist = ticker.history(period='1d')
+                        if not hist.empty:
+                            prices[stock] = hist['Close'].iloc[-1]
+                        else:
+                            # Try getting from info
+                            info = ticker.info
+                            prices[stock] = info.get('regularMarketPrice', None)
+                        
+                        # Small delay between tickers
+                        time.sleep(0.2)
+                        
+                    except Exception as e:
+                        if "429" in str(e):
+                            raise  # Re-raise to trigger retry
+                        print(f"  Warning: Could not fetch {stock}: {e}")
+                        prices[stock] = None
+                
+                # If we got all prices, return them
+                if all(v is not None for v in prices.values()):
+                    return prices
+                
+                # Otherwise, try CSV fallback
+                if use_csv_fallback:
+                    print("  Using CSV fallback for missing prices...")
+                    prices = self._get_prices_from_csv(prices)
+                    return prices
+                    
+                return prices
+                
+            except Exception as e:
+                if "429" in str(e) or "Too Many Requests" in str(e):
+                    if attempt < max_retries - 1:
+                        print(f"  Rate limit hit, retrying in {retry_delay}s...")
+                        continue
+                    else:
+                        print(f"  Rate limit exceeded, using CSV fallback...")
+                        if use_csv_fallback:
+                            return self._get_prices_from_csv()
+                print(f"  Error fetching prices: {e}")
+                if use_csv_fallback:
+                    return self._get_prices_from_csv()
+        
+        # Last resort
+        return {stock: 100.0 for stock in self.stocks}
+
+    def _get_prices_from_csv(self, partial_prices: Dict[str, float] = None) -> Dict[str, float]:
+        """Get latest prices from CSV as fallback"""
         try:
-            prices = {}
+            df = pd.read_csv(self.logger.csv_path)
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            
+            prices = partial_prices if partial_prices else {}
+            
             for stock in self.stocks:
-                ticker = yf.Ticker(stock)
-                hist = ticker.history(period='1d')
-                if not hist.empty:
-                    prices[stock] = hist['Close'].iloc[-1]
-                else:
-                    info = ticker.info
-                    prices[stock] = info.get('regularMarketPrice', 100)
+                if prices.get(stock) is None:
+                    stock_data = df[df['ticker'] == stock]
+                    if not stock_data.empty:
+                        latest_price = stock_data.sort_values('timestamp')['close'].iloc[-1]
+                        prices[stock] = float(latest_price)
+                    else:
+                        prices[stock] = 100.0
+            
             return prices
+            
         except Exception as e:
-            print(f"Error fetching prices: {e}")
-            return {stock: random.uniform(100, 500) for stock in self.stocks}
+            print(f"  Warning: CSV fallback failed: {e}")
+            return {stock: 100.0 for stock in self.stocks}
 
     def get_sp500_data(self, start_date: datetime, end_date: datetime = None) -> pd.DataFrame:
         if end_date is None:
