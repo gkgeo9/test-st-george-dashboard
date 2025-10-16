@@ -84,8 +84,8 @@ def generate_static_dashboard(portfolio_manager, output_file="public/index.html"
     )
 
     # 2. Portfolio Value Timeline
+    portfolio_data = []
     if not df.empty and 'cash_after' in df.columns:
-        portfolio_data = []
         for timestamp in df['timestamp'].dt.floor('D').unique():
             timestamp_data = df[df['timestamp'].dt.floor('D') == timestamp]
             if not timestamp_data['cash_after'].isna().all():
@@ -105,36 +105,48 @@ def generate_static_dashboard(portfolio_manager, output_file="public/index.html"
                     'value': stock_value + latest_cash
                 })
 
-        if portfolio_data:
-            portfolio_df = pd.DataFrame(portfolio_data)
+    if portfolio_data:
+        portfolio_df = pd.DataFrame(portfolio_data)
 
-            # Color points based on performance
-            colors = ['#27ae60' if v >= pm.initial_value else '#e74c3c'
-                      for v in portfolio_df['value']]
+        # Color points based on performance
+        colors = ['#27ae60' if v >= pm.initial_value else '#e74c3c'
+                  for v in portfolio_df['value']]
 
-            fig.add_trace(
-                go.Scatter(
-                    x=portfolio_df['timestamp'],
-                    y=portfolio_df['value'],
-                    mode='lines+markers',
-                    name='Portfolio Value',
-                    line=dict(color='#3498db', width=3),
-                    marker=dict(size=6, color=colors),
-                    fill='tozeroy',
-                    fillcolor='rgba(52, 152, 219, 0.1)',
-                    hovertemplate='<b>%{x|%Y-%m-%d}</b><br>$%{y:,.2f}<extra></extra>'
-                ),
-                row=1, col=2
-            )
+        fig.add_trace(
+            go.Scatter(
+                x=portfolio_df['timestamp'],
+                y=portfolio_df['value'],
+                mode='lines+markers',
+                name='Portfolio Value',
+                line=dict(color='#3498db', width=3),
+                marker=dict(size=6, color=colors),
+                fill='tozeroy',
+                fillcolor='rgba(52, 152, 219, 0.1)',
+                hovertemplate='<b>%{x|%Y-%m-%d}</b><br>$%{y:,.2f}<extra></extra>'
+            ),
+            row=1, col=2
+        )
 
-            # Add initial value reference line
-            fig.add_hline(
-                y=pm.initial_value,
-                line_dash="dash",
-                line_color="#e74c3c",
-                line_width=2,
-                row=1, col=2
-            )
+        # Add initial value reference line - FIXED: specify row and col
+        fig.add_shape(
+            type="line",
+            x0=portfolio_df['timestamp'].min(),
+            x1=portfolio_df['timestamp'].max(),
+            y0=pm.initial_value,
+            y1=pm.initial_value,
+            line=dict(color="#e74c3c", width=2, dash="dash"),
+            row=1, col=2
+        )
+        
+        # Add annotation for initial value line
+        fig.add_annotation(
+            x=portfolio_df['timestamp'].max(),
+            y=pm.initial_value,
+            text="Initial Value",
+            showarrow=False,
+            xanchor="left",
+            row=1, col=2
+        )
 
     # 3. Stock Prices
     if not df.empty:
@@ -174,14 +186,18 @@ def generate_static_dashboard(portfolio_manager, output_file="public/index.html"
             row=2, col=2
         )
 
-        # Add mean line
+        # Add mean line - FIXED: use add_shape instead of add_vline
         if len(returns) > 0:
             mean_return = np.mean(returns)
-            fig.add_vline(
-                x=mean_return,
-                line_dash="dash",
-                line_color="#3498db",
-                line_width=2,
+            y_max = np.histogram(returns, bins=30)[0].max()
+            
+            fig.add_shape(
+                type="line",
+                x0=mean_return,
+                x1=mean_return,
+                y0=0,
+                y1=y_max,
+                line=dict(color="#3498db", width=2, dash="dash"),
                 row=2, col=2
             )
 
@@ -214,7 +230,16 @@ def generate_static_dashboard(portfolio_manager, output_file="public/index.html"
                 row=3, col=1
             )
 
-            fig.add_hline(y=0, line_dash="solid", line_color="#95a5a6", line_width=2, row=3, col=1)
+            # Add zero line - FIXED: use add_shape
+            fig.add_shape(
+                type="line",
+                x0=-0.5,
+                x1=len(stocks) - 0.5,
+                y0=0,
+                y1=0,
+                line=dict(color="#95a5a6", width=2),
+                row=3, col=1
+            )
 
     # 6. Key Metrics Table
     pnl_color = '#27ae60' if stats['total_pnl'] >= 0 else '#e74c3c'
@@ -315,10 +340,19 @@ def generate_static_dashboard(portfolio_manager, output_file="public/index.html"
             row=4, col=2
         )
 
-        fig.add_hline(y=0, line_dash="solid", line_color="#95a5a6", line_width=1, row=4, col=2)
+        # Add zero line - FIXED: use add_shape
+        fig.add_shape(
+            type="line",
+            x0=dates[0],
+            x1=dates[-1],
+            y0=0,
+            y1=0,
+            line=dict(color="#95a5a6", width=1),
+            row=4, col=2
+        )
 
     # Update overall layout
-    current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')
     fig.update_layout(
         title={
             'text': f"📊 Portfolio Dashboard - Last Updated: {current_time}",
@@ -394,7 +428,7 @@ def generate_static_dashboard(portfolio_manager, output_file="public/index.html"
                 <p>Last updated: {current_time}</p>
             </div>
             <div class="info-box">
-                <strong>ℹ️ Note:</strong> This dashboard automatically updates every hour. 
+                <strong>ℹ️ Note:</strong> This dashboard automatically updates every 6 hours. 
                 Data is pulled from your trading log and processed via GitHub Actions.
             </div>
             {fig.to_html(include_plotlyjs='cdn', full_html=False, config={{'displayModeBar': True, 'displaylogo': False}})}
