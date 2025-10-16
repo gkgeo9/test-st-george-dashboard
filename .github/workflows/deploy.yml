@@ -1,16 +1,11 @@
-# .github/workflows/update-dashboard.yml
-name: Update Dashboard
+# .github/workflows/deploy.yml
+name: Update Portfolio Dashboard
 
 on:
-  # Run on push to main branch
   push:
     branches: [ main, master ]
-  
-  # Run on schedule (every hour)
   schedule:
-    - cron: '0 * * * *'  # Every hour at minute 0
-  
-  # Allow manual trigger
+    - cron: '0 */6 * * *'  # Every 6 hours (safer for API limits)
   workflow_dispatch:
 
 permissions:
@@ -24,7 +19,6 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
-        token: ${{ secrets.GITHUB_TOKEN }}
         fetch-depth: 0
     
     - name: Set up Python
@@ -37,13 +31,26 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
     
-    - name: Run portfolio update and export
+    - name: Generate dashboard
       run: |
-        python export_dashboard.py
+        echo "🚀 Generating portfolio dashboard..."
+        python generate_static_dashboard.py
+        echo "✅ Dashboard generated successfully"
     
-    - name: Commit and push if changed
+    - name: Commit and push updates
       run: |
         git config --local user.email "github-actions[bot]@users.noreply.github.com"
         git config --local user.name "github-actions[bot]"
-        git add dashboard.html trading_log.csv portfolio_data.json || true
-        git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update dashboard [$(date +'%Y-%m-%d %H:%M:%S')]" && git push)
+        
+        # Add all updated files
+        git add public/index.html trading_log.csv portfolio_data.json
+        
+        # Check if there are changes
+        if git diff --staged --quiet; then
+          echo "📝 No changes to commit"
+        else
+          git commit -m "🤖 Auto-update dashboard [$(date +'%Y-%m-%d %H:%M:%S UTC')]"
+          git push
+          echo "✅ Changes pushed to repository"
+          echo "🌐 Vercel will auto-deploy in ~1 minute"
+        fi
