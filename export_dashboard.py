@@ -2,8 +2,8 @@
 """
 Export dashboard to static HTML for GitHub Pages deployment
 """
-import dash
-from dash import dcc, html
+# import dash
+# from dash import dcc, html
 import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
